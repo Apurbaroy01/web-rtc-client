@@ -1,4 +1,4 @@
-// src/DoctorPatientCall.jsx (single component version)
+// src/DoctorPatientCall.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { Phone, PhoneOff, Video, User } from "lucide-react";
 import io from "socket.io-client";
@@ -24,25 +24,34 @@ export default function DoctorPatientCall() {
 
         socket.on("connect", () => setSocketId(socket.id));
 
+        // incoming call
         socket.on("call-made", async ({ from, offer }) => {
             await enableLocalStream();
             createPeerConnection(from);
-            await pcRef.current.setRemoteDescription(offer);
 
+            await pcRef.current.setRemoteDescription(offer);
             const answer = await pcRef.current.createAnswer();
             await pcRef.current.setLocalDescription(answer);
+
             socket.emit("make-answer", { to: from, answer });
-
             setConnected(true);
         });
 
+        // incoming answer
         socket.on("answer-made", async ({ answer }) => {
-            await pcRef.current.setRemoteDescription(answer);
+            if (pcRef.current)
+                await pcRef.current.setRemoteDescription(answer);
             setConnected(true);
         });
 
+        // ICE candidate
         socket.on("ice-candidate", async ({ candidate }) => {
-            if (candidate) await pcRef.current.addIceCandidate(candidate);
+            try {
+                if (candidate && pcRef.current)
+                    await pcRef.current.addIceCandidate(candidate);
+            } catch (err) {
+                console.error("ICE add error:", err);
+            }
         });
 
         return () => socket.disconnect();
@@ -50,7 +59,12 @@ export default function DoctorPatientCall() {
 
     async function enableLocalStream() {
         if (localStreamRef.current) return;
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+        });
+
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
     }
@@ -61,18 +75,28 @@ export default function DoctorPatientCall() {
         const pc = new RTCPeerConnection(RTC_CONFIG);
         pcRef.current = pc;
 
-        localStreamRef.current.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current));
+        // local tracks add
+        localStreamRef.current.getTracks().forEach((track) => {
+            pc.addTrack(track, localStreamRef.current);
+        });
 
         pc.ontrack = (event) => {
             remoteVideoRef.current.srcObject = event.streams[0];
         };
 
         pc.onicecandidate = (e) => {
-            if (e.candidate) socketRef.current.emit("ice-candidate", { to: remoteSocket, candidate: e.candidate });
+            if (e.candidate) {
+                socketRef.current.emit("ice-candidate", {
+                    to: remoteSocket,
+                    candidate: e.candidate,
+                });
+            }
         };
     }
 
     async function callUser() {
+        if (!remoteId.trim()) return alert("Enter Remote User ID");
+
         await enableLocalStream();
         createPeerConnection(remoteId);
 
@@ -83,8 +107,19 @@ export default function DoctorPatientCall() {
     }
 
     function hangUp() {
-        if (pcRef.current) pcRef.current.close();
-        pcRef.current = null;
+        if (pcRef.current) {
+            pcRef.current.close();
+            pcRef.current = null;
+        }
+
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach((t) => t.stop());
+            localStreamRef.current = null;
+        }
+
+        localVideoRef.current.srcObject = null;
+        remoteVideoRef.current.srcObject = null;
+
         setConnected(false);
     }
 
@@ -98,12 +133,16 @@ export default function DoctorPatientCall() {
 
                 <div className="grid md:grid-cols-2 gap-6 mb-6">
                     <div className="card bg-base-100 shadow-xl p-4">
-                        <h2 className="font-semibold mb-2 flex items-center gap-2"><User size={18} /> You</h2>
+                        <h2 className="font-semibold mb-2 flex items-center gap-2">
+                            <User size={18} /> You
+                        </h2>
                         <video ref={localVideoRef} autoPlay muted playsInline className="rounded-xl w-full bg-black" />
                     </div>
 
                     <div className="card bg-base-100 shadow-xl p-4">
-                        <h2 className="font-semibold mb-2 flex items-center gap-2"><Video size={18} /> Remote</h2>
+                        <h2 className="font-semibold mb-2 flex items-center gap-2">
+                            <Video size={18} /> Remote
+                        </h2>
                         <video ref={remoteVideoRef} autoPlay playsInline className="rounded-xl w-full bg-black" />
                     </div>
                 </div>
@@ -126,10 +165,16 @@ export default function DoctorPatientCall() {
                             <PhoneOff size={18} /> Hang Up
                         </button>
 
-                        <button onClick={enableLocalStream} className="btn btn-neutral">Start Camera</button>
+                        <button onClick={enableLocalStream} className="btn btn-neutral">
+                            Start Camera
+                        </button>
 
                         <div className="ml-auto font-semibold">
-                            {connected ? <span className="text-green-600">Connected</span> : <span className="text-gray-500">Not Connected</span>}
+                            {connected ? (
+                                <span className="text-green-600">Connected</span>
+                            ) : (
+                                <span className="text-gray-500">Not Connected</span>
+                            )}
                         </div>
                     </div>
                 </div>
